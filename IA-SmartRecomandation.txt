@@ -1,4 +1,212 @@
-* Get predictions of each event by a user giving some ratings and its neighbourhood:
+package tn.esprit.pi.services;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+
+import tn.esprit.pi.config.ValueComparator;
+import tn.esprit.pi.config.ValueComparatorInt;
+import tn.esprit.pi.entities.Evaluation;
+import tn.esprit.pi.entities.Event;
+import tn.esprit.pi.entities.User;
+import tn.esprit.pi.repositories.IEvaluationRepository;
+import tn.esprit.pi.repositories.IEventRepository;
+import tn.esprit.pi.repositories.IUserRepository;
+
+
+@Service
+public class EvaluationServiceImpl implements IEvaluationService {
+    @Autowired
+	IUserRepository iUserRepository;
+	
+	@Autowired
+	IEventRepository iEventRepository;
+	
+	@Autowired
+	IEvaluationRepository iEvaluationRepository;
+	
+	
+    // Number of output neighbourhoods
+    private static final int NUM_NEIGHBOURHOODS = 10;
+    // Number of output recommendations
+    private static final int NUM_RECOMMENDATIONS = 3;
+	
+	
+	
+	
+	
+	  
+    /**
+     * Map with the user id as key and its ratings as value that is a map with boo ASIN as key and its rating as value
+     */
+    private Map<Integer, Map<Integer, Integer>> ratings;
+
+    /**
+     * Average rating of each user where the key is the user id and the value its average rating
+     */
+    private Map<Integer, Double> averageRating;
+
+    /**
+     * Constructor
+     */
+    public EvaluationServiceImpl() {
+        ratings = new HashMap<>();
+        averageRating = new HashMap<>();
+    }
+
+    public Map<Integer, Map<Integer, Integer>> getRatings() {
+        return ratings;
+    }
+
+    private void setRatings(Map<Integer, Map<Integer, Integer>> ratings) {
+        this.ratings = ratings;
+    }
+
+    public Map<Integer, Double> getAverageRating() {
+        return averageRating;
+    }
+
+    private void setAverageRating(Map<Integer, Double> averageRating) {
+        this.averageRating = averageRating;
+    }
+
+
+	
+	@Override
+	public ResponseEntity<?> evaluateEvent(int idUser, int idEvent, int rate) {
+		// TODO Auto-generated method stub
+				Evaluation evaluate = new Evaluation();
+				User user = iUserRepository.findById(idUser).get();
+				Event event =iEventRepository.findById( idEvent).get();
+				System.out.println("event === counted ="+iEvaluationRepository.countUserRatingEvent(idUser,  idEvent));
+
+				
+				if(rate > 5) {
+					return ResponseEntity.ok("Rating only below or equal 5");
+				}
+				else if(rate <0) {
+					return ResponseEntity.ok("Rating could not be negative");
+ 
+				}
+				
+				else if(iEvaluationRepository.countUserRatingEvent(idEvent,  idUser)!=0) {
+					return ResponseEntity.ok("you are already  rate this event");
+				}
+				else {
+					evaluate.setEvent(event);
+					evaluate.setUser(user);
+					evaluate.setRate(rate);
+					iEvaluationRepository.save(evaluate);
+					return ResponseEntity.ok( "Rating is done successfully");
+				}
+	}
+
+
+	@Override
+	public String updateRating(int iduser , int idproduct, int idRate, int rate) {
+		// TODO Auto
+		List<Evaluation>evaluations = iEvaluationRepository.findEvaluationByUserAndEvent(idproduct, iduser);
+		if(rate > 5) {
+			return "Rating only below or equal 5"	;
+		}
+		if(evaluations.size()!=0) {
+			for(int i  =0 ; i<evaluations.size(); i++) {
+				
+				if(idRate == evaluations.get(i).getIdEvalution()) {
+					evaluations.get(i).setRate(rate);
+					iEvaluationRepository.save(evaluations.get(i));
+					return "Update Evaluation successfully";
+				}
+			}
+			
+			
+		}
+		return "No Evaluations Found for you to update";
+		
+	}
+	
+		@Override
+	public int countRatingUserByProduct(int idp) {
+		// TODO Auto-generated method stub
+		
+		Event p = iEventRepository.findById(idp).get();
+		
+		if(p != null)
+			return iEvaluationRepository.countEvaluation(p.getIdEvenement());
+		else
+			return 0;
+		
+	}
+	
+	
+	private Map<Integer, Double> getNeighbourhoods(Map<Integer, Integer> userRatings) {
+        Map<Integer, Double> neighbourhoods = new HashMap<>();
+        ValueComparatorInt valueComparator = new ValueComparatorInt(neighbourhoods);
+        Map<Integer, Double> sortedNeighbourhoods = new TreeMap<>(valueComparator);
+
+        double userAverage = getAverage(userRatings);
+        
+        
+
+        for (int user : ratings.keySet()) {
+            ArrayList<Integer> matches = new ArrayList<>();
+            for (int productASIN : userRatings.keySet()) {
+                if (ratings.get(user).containsKey(productASIN)) {
+                    matches.add(productASIN);
+                }
+            }
+            double matchRate;
+            if (matches.size() > 0) {
+                double numerator = 0, userDenominator = 0, 
+                		otherUserDenominator = 0;
+              
+                
+                for (int productASIN  : matches) {
+                    double u = userRatings.get(productASIN) - userAverage;
+                    double v = ratings.get(user).get(productASIN) - averageRating.get(user);
+
+                    numerator += u * v;
+                    userDenominator += u * u;
+                    otherUserDenominator += v * v;
+                }
+                if (userDenominator == 0 || otherUserDenominator == 0) {
+                    matchRate = 0;
+                } else {
+                    matchRate = numerator / (Math.sqrt(userDenominator) * Math.sqrt(otherUserDenominator));
+                }
+            } else {
+                matchRate = 0;
+            }
+
+            neighbourhoods.put(user, matchRate);
+        }
+        sortedNeighbourhoods.putAll(neighbourhoods);
+
+        Map<Integer, Double> output = new TreeMap<>();
+
+        Iterator entries = sortedNeighbourhoods.entrySet().iterator();
+        int i = 0;
+        while (entries.hasNext() && i < NUM_NEIGHBOURHOODS) {
+            Map.Entry entry = (Map.Entry) entries.next();
+            if ((double) entry.getValue() > 0) {
+                output.put((int) entry.getKey(), (double) entry.getValue());
+                i++;
+            }
+        }
+        return output;
+    }
+
+    /********************************Pärtie Intelligence Articficiel / Prédiction DataSet(x,y) and deep learning (Made by Chadi)****************************
+     * Get predictions of each event by a user giving some ratings and its neighbourhood:
      * r(u,i) = r(u) + sum(sim(u,v) * (r(v,i) - r(v))) / sum(abs(sim(u,v)))
      * sim(u,v): similarity between u and v users
      * r(u,i): rating of the event i by the user u
@@ -146,3 +354,11 @@
          }
          return recommendedProductsArray.toString();
      }
+
+	
+	
+	
+	
+	
+	
+}
