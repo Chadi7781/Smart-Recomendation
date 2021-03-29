@@ -1,0 +1,148 @@
+* Get predictions of each event by a user giving some ratings and its neighbourhood:
+     * r(u,i) = r(u) + sum(sim(u,v) * (r(v,i) - r(v))) / sum(abs(sim(u,v)))
+     * sim(u,v): similarity between u and v users
+     * r(u,i): rating of the event i by the user u
+     * r(u): average rating of the user u
+     *
+     * @param userRatings    ratings of the user
+     * @param neighbourhoods nearest neighbourhoods
+     * @param books          books in the database
+     * @return predictions for each event
+     */
+    private Map<Integer, Double> getRecommendations(Map<Integer, Integer> userRatings,
+                                                 Map<Integer, Double> neighbourhoods, Map<Integer, String> books) {
+
+        Map<Integer, Double> predictedRatings = new HashMap<>();
+
+        // r(u)
+        double userAverage = getAverage(userRatings);
+
+        for (int productASIN : books.keySet()) {
+            if (!userRatings.containsKey(productASIN)) {
+
+                // sum(sim(u,v) * (r(v,i) - r(v)))
+                double numerator = 0;
+
+                // sum(abs(sim(u,v)))
+                double denominator = 0;
+
+                for (int neighbourhood : neighbourhoods.keySet()) {
+                    if (ratings.get(neighbourhood).containsKey(productASIN)) {
+                        double matchRate = neighbourhoods.get(neighbourhood);
+                        numerator +=
+                                matchRate * (ratings.get(neighbourhood).get(productASIN) - averageRating.get(neighbourhood));
+                        denominator += Math.abs(matchRate);
+                    }
+                }
+
+                double predictedRating = 0;
+                if (denominator > 0) {
+                    predictedRating = userAverage + numerator / denominator;
+                    if (predictedRating > 5) {
+                        predictedRating = 5;
+                    }
+                }
+                predictedRatings.put(productASIN, predictedRating);
+            }
+        }
+        return predictedRatings;
+    }
+
+    /**
+     * Get average of the ratings of a user
+     *
+     * @param userRatings ratings of a user
+     * @return average or the ratings of a user
+     */
+    private double getAverage(Map<Integer, Integer> userRatings) {
+        double userAverage = 0;
+        for (Map.Entry<Integer, Integer> longIntegerEntry : userRatings.entrySet()) {
+            userAverage += (int) ((Map.Entry) longIntegerEntry).getValue();
+        }
+        return userAverage / userRatings.size();
+    }
+    
+    
+	
+	 public String recommendedProducts(int  userId) throws JSONException  {
+
+         Map<Integer, Double> averageRating = new HashMap<>();
+         Map<Integer, Map<Integer, Integer>> setRatings = new HashMap<>();
+
+         Map<Integer, Map<Integer, Integer>> myRatesMap = new TreeMap<>();
+         Map<Integer, Map<Integer, Integer>> userWithRatesMap = new TreeMap<>();
+
+
+         iUserRepository.findAll().forEach(userItem -> {
+             int userID = userItem.getIdUser();
+             Map<Integer, Integer> userRatings = new HashMap<>();
+
+             userItem.getEvaluations().forEach(userEventRating -> {
+                         if (userEventRating.getUser().getIdUser()==userID ) {
+                             System.out.println(userEventRating.getRate());
+                             System.out.println(userEventRating.getUser().getIdUser());
+                             userRatings.put(userEventRating.getUser().getIdUser(), userEventRating.getRate());
+                         }
+                     }
+             );
+
+             if (userId==userID)  {
+                 myRatesMap.put(userID, userRatings);
+             } else {
+                 userWithRatesMap.put(userID, userRatings);
+
+                 setRatings(userWithRatesMap);
+                 averageRating.put(userID, 0.0);
+
+                 for (Map.Entry<Integer, Integer> longIntegerEntry : userRatings.entrySet()) {
+
+                     if (ratings.containsKey(userID)) {
+                         ratings.get(userID).put(longIntegerEntry.getKey(), longIntegerEntry.getValue());
+                         averageRating.put(userID, averageRating.get(userID) + (double) longIntegerEntry.getValue());
+                     } else {
+                         Map<Integer, Integer> bookRating = new HashMap<>();
+                         bookRating.put(longIntegerEntry.getKey(), longIntegerEntry.getValue());
+                         ratings.put(userID, bookRating);
+                         averageRating.put(userID, (double) longIntegerEntry.getValue());
+                     }
+                 }
+             }
+         });
+
+         for (Map.Entry<Integer, Double> longDoubleEntry : averageRating.entrySet()) {
+             if (ratings.containsKey(longDoubleEntry.getKey())) {
+                 longDoubleEntry.setValue(longDoubleEntry.getValue() / (double) ratings.get(longDoubleEntry.getKey()).size());
+             }
+         }
+
+         setAverageRating(averageRating);
+
+         Map<Integer, String> products = new HashMap<>();
+
+         iEventRepository.findAll()
+                 .forEach(event ->
+                         products.put(event.getIdEvenement(), event.getTitle()));
+
+         Map<Integer, Double> neighbourhoods = getNeighbourhoods(myRatesMap.get(userId));
+         Map<Integer, Double> recommendations = getRecommendations(myRatesMap.get(userId), neighbourhoods, products);
+         ValueComparatorInt valueComparator = new ValueComparatorInt(recommendations);
+
+         Map<Integer, Double> sortedRecommendations = new TreeMap<>(valueComparator);
+         sortedRecommendations.putAll(recommendations);
+
+         Iterator<Map.Entry<Integer, Double>> sortedREntries = sortedRecommendations.entrySet().iterator();
+         JSONArray recommendedProductsArray = new JSONArray();
+
+         int i = 0;
+         while (sortedREntries.hasNext() && i < NUM_RECOMMENDATIONS) {
+             Map.Entry<Integer, Double> entry = sortedREntries.next();
+                  JSONObject recommendedProducts = new JSONObject("{}");
+
+                 recommendedProducts.put("Product Name", products.get(entry.getKey()));
+                 recommendedProducts.put("Rate", entry.getValue());
+                 recommendedProductsArray.put(recommendedProducts);
+                 i++;
+
+         }
+         return recommendedProductsArray.toString();
+     }
